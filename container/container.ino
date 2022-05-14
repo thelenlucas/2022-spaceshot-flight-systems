@@ -29,7 +29,8 @@ int blinkDelay = 500;
 int ledOn = 1;
 
 //BNO Instance
-Adafruit_BNO055 bno = Adafruit_BNO055(28);
+
+Adafruit_BNO055 bno = Adafruit_BNO055(55, 0x28, &Wire2);
 
 //Various logic variables
 boolean simulationMode = false;
@@ -180,17 +181,24 @@ void loop() {
   }
   
   sensors_event_t event;
+  sensors_event_t linearAccelData;
+  
   bno.getEvent(&event);
+  bno.getEvent(&linearAccelData, Adafruit_BNO055::VECTOR_LINEARACCEL);
 
   //How we read orientation
   float x_orientation = event.orientation.x;
   float y_orientation = event.orientation.y;
   float z_orientation = event.orientation.z;
 
+  float x_accel = linearAccelData.acceleration.x;
+  float y_accel = linearAccelData.acceleration.y;
+  float z_accel = linearAccelData.acceleration.z;
+
   //Parse data shit
   getDataFromPC();
   //Reading pressure
-  MS5611.read();
+  //MS5611.read();
   float pressure = MS5611.getPressure();
   float realAltitude = MBA_To_Altitude_Meters(pressure) - altitudeOffset;
   
@@ -216,8 +224,8 @@ void loop() {
         String tp_released = "R";
       }
       
-      toTransmit = "1091," + String("timePlaceholder") + "," + String(packetsTransmitted) + "," + cMode + "," + tp_released + "," + String(realAltitude) + "," + String(temperature) + "," + "3.3v" + "," + String(x_orientation) + "," + String(y_orientation) + "," + String(z_orientation) + ",accelPlaceHolder_x,accelPlaceHolder_y,accelPlaceHolder_z,magPlaceHolder_x,magPlaceHolder_y,magPlaceHolder_z,pointingErrorPlaceHolder," + flight_state;
-      if (transmitting) {
+      toTransmit = "1091," + String("timePlaceholder") + "," + String(packetsTransmitted) + "," + cMode + "," + tp_released + "," + String(realAltitude) + "," + String(temperature) + "," + "3.3v" + "," + String(x_orientation) + "," + String(y_orientation) + "," + String(z_orientation) + "," + String(x_accel) + "," + String(y_accel) + "," + String(z_accel) + "," + "magPlaceHolder_x,magPlaceHolder_y,magPlaceHolder_z,pointingErrorPlaceHolder," + flight_state;
+      if (transmitting) { 
         transmitPacket(toTransmit);
         packetsTransmitted++;
         timeSinceLastTransmission = 0;
