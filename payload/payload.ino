@@ -73,13 +73,14 @@ float MBA_To_Altitude_Meters(float millbars) {
 }
 
 void transmitPacket(String transmit) {
-  Serial1.println(transmit);
+  Serial8.println(transmit);
   Serial.println(transmit);
 }
 
 void setup(){
   Serial1.begin(9600);
   Serial.begin(9600);
+  Serial8.begin(9600);
 
   //LED setup
   pinMode(ledPin, OUTPUT);
@@ -123,9 +124,9 @@ void getDataFromPC() {
 
   // receive data from PC and save it into inputBuffer
     
-  if(Serial.available() > 0) {
+  if(Serial8.available() > 0) {
 
-    char x = Serial.read();
+    char x = Serial8.read();
 
       // the order of these IF clauses is significant
       
@@ -198,7 +199,7 @@ void loop() {
   //Parse data shit
   getDataFromPC();
   //Reading pressure
-  //MS5611.read();
+  MS5611.read();
   float pressure = MS5611.getPressure();
   float realAltitude = MBA_To_Altitude_Meters(pressure) - altitudeOffset;
   
@@ -207,12 +208,12 @@ void loop() {
   //Serial.println(realAltitude);
 
   //How we read temperature
-  double temperature = lm92.readTemperature();
+  double temperature = MS5611.getTemperature();
 
   //Should we transmit?
   if (timeSinceLastTransmission > transmissionInterval) {
       String toTransmit;
-      String cMode = "";
+      String cMode = "P";
       if (simulationMode) {
         String cMode = "S";
       } else {
@@ -224,7 +225,7 @@ void loop() {
         String tp_released = "R";
       }
       
-      toTransmit = "1091," + String("timePlaceholder") + "," + String(packetsTransmitted) + "," + cMode + "," + tp_released + "," + String(realAltitude) + "," + String(temperature) + "," + "3.3v" + "," + String(x_orientation) + "," + String(y_orientation) + "," + String(z_orientation) + "," + String(x_accel) + "," + String(y_accel) + "," + String(z_accel) + "," + "magPlaceHolder_x,magPlaceHolder_y,magPlaceHolder_z,pointingErrorPlaceHolder," + flight_state;
+      toTransmit = "1091," + String("timePlaceholder") + "," + String(packetsTransmitted) + "," + cMode + "," + String(realAltitude) + "," + String(temperature) + "," + "3.3v" + "," + String(x_orientation) + "," + String(y_orientation) + "," + String(z_orientation) + "," + String(x_accel) + "," + String(y_accel) + "," + String(z_accel) + "," + "magPlaceHolder_x,magPlaceHolder_y,magPlaceHolder_z,pointingErrorPlaceHolder," + flight_state;
       if (transmitting) { 
         transmitPacket(toTransmit);
         packetsTransmitted++;
