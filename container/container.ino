@@ -4,6 +4,9 @@
 #include <MS5611.h>
 #include <math.h>
 #include <EEPROM.h>
+#include <Servo.h>
+
+#define latchPin 6
 
 //Data for keeping track of various times
 int timeSinceLastTransmission = 0;
@@ -75,14 +78,33 @@ float MBA_To_Altitude_Meters(float millbars) {
 void transmitPacket(String transmit) {
   Serial1.println(transmit);
   Serial.println(transmit);
+  Serial2.println(transmit);
+  Serial5.println(transmit);
+}
+
+Servo latchServo;
+
+void closeLatch() {
+  latchServo.write(0);
+}
+
+void openLatch() {
+  latchServo.write(0);
 }
 
 void setup(){
   Serial1.begin(9600);
   Serial.begin(9600);
+  Serial2.begin(9600);
+  Serial5.begin(9600); //Container to payload
 
   //LED setup
   pinMode(ledPin, OUTPUT);
+
+  //Servo setup
+  latchServo.attach(latchPin);
+  closeLatch();
+  latchServo.write(0);
 
   //Test that our BNO is working
   if(!bno.begin())
@@ -93,7 +115,9 @@ void setup(){
   }
 
   //Test that our MS is working
-  if (MS5611.begin() == true)
+  uint8_t scl = 24;
+  uint8_t sda = 25;
+  if (MS5611.begin(&Wire2) == true)
   {
   } else {
     Cansat_Raise_Issue("MS ERROR");
@@ -123,9 +147,9 @@ void getDataFromPC() {
 
   // receive data from PC and save it into inputBuffer
     
-  if(Serial.available() > 0) {
+  if(Serial2.available() > 0) {
 
-    char x = Serial.read();
+    char x = Serial2.read();
 
       // the order of these IF clauses is significant
       
@@ -207,7 +231,7 @@ void loop() {
   //Serial.println(realAltitude);
 
   //How we read temperature
-  double temperature = lm92.readTemperature();
+  double temperature = MS5611.getTemperature();
 
   //Should we transmit?
   if (timeSinceLastTransmission > transmissionInterval) {
@@ -226,10 +250,14 @@ void loop() {
       
       toTransmit = "1091," + String("timePlaceholder") + "," + String(packetsTransmitted) + "," + cMode + "," + tp_released + "," + String(realAltitude) + "," + String(temperature) + "," + "3.3v" + "," + String(x_orientation) + "," + String(y_orientation) + "," + String(z_orientation) + "," + String(x_accel) + "," + String(y_accel) + "," + String(z_accel) + "," + "magPlaceHolder_x,magPlaceHolder_y,magPlaceHolder_z,pointingErrorPlaceHolder," + flight_state;
       if (transmitting) { 
+        transmitPacket(String(MS5611.getTemperature()));
         transmitPacket(toTransmit);
         packetsTransmitted++;
         timeSinceLastTransmission = 0;
         backupPackets(packetsTransmitted);
+
+        openLatch();
+        latchServo.write(180);
       }
   }
 
