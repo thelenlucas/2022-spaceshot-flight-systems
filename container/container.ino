@@ -6,6 +6,7 @@
 #include <EEPROM.h>
 #include <Servo.h>
 #include <SparkFun_u-blox_GNSS_Arduino_Library.h> //GNSS Library
+#include <string>
 
 #define latchPin 6
 
@@ -17,7 +18,7 @@ int lastExecutionTime = 0;
 
 //Transmission Variables
 int packetsTransmitted = 0;
-bool transmitting = true;
+bool transmitting = false;
 
 //Current Flight State
 String flight_state = "PS_STANDBY";
@@ -169,7 +170,6 @@ void getDataFromPC() {
       newDataFromPC = true;
       inputBuffer[bytesRecvd] = 0;
       processCommand(inputBuffer);
-      transmitPacket("boop");
     }
     
     if(readInProgress) {
@@ -220,13 +220,23 @@ void getDataFromPC_wired() {
   }
 }
 
+//CMD,1091,CX,ON
 void processCommand(String com) {
   if (com == "RST_PACKET") {
     clearPackets();
     packetsTransmitted = 0;
-  }
+  } else if (com.substring(9,11) == "CX") {
+    //Telemetry ON/OFF
+    if (com.substring(12,14) == "ON") {
+      transmitting = true;
+    } else if (com.substring(12, 15) == "OFF") {
+      transmitting = false;
+    }
+    
+  } else if (com
 
-  transmitPacket(com);
+
+  transmitPacket(com.substring(12,14));
 }
 
 void loop() {
@@ -265,6 +275,7 @@ void loop() {
 
   //Parse data shit
   getDataFromPC();
+  getDataFromPC_wired();
   //Reading pressure
   //MS5611.read();
   float pressure = MS5611.getPressure();
@@ -292,22 +303,21 @@ void loop() {
         String tp_released = "R";
       }
 
-      long longitude = myGNSS.getLongitude();
-      long latitude = myGNSS.getLatitude();
-
-      float gpsLat = latitude / 10000000;
-      float gpsLong = longitude / 10000000;
-      toTransmit = "1091," + String("timePlaceholder") + "," + String(packetsTransmitted) + "," + cMode + "," + tp_released + "," + String(realAltitude) + "," + String(temperature) + "," + "3.3v" + "," + "GPS Time" + "," + String(gpsLat);
-      toTransmit = toTransmit + "," + String(gpsLong) + "," + String(myGNSS.getAltitude()) + "," + String(myGNSS.getSIV()) + "," + String("LS_CMD");
       if (transmitting) { 
-        transmitPacket(String(MS5611.getTemperature()));
+        long longitude = myGNSS.getLongitude();
+        long latitude = myGNSS.getLatitude();
+  
+        float gpsLat = latitude / 10000000;
+        float gpsLong = longitude / 10000000;
+        toTransmit = "1091," + String("timePlaceholder") + "," + String(packetsTransmitted) + "," + cMode + "," + tp_released + "," + String(realAltitude) + "," + String(temperature) + "," + "3.3v" + "," + "GPS Time" + "," + String(gpsLat);
+        toTransmit = toTransmit + "," + String(gpsLong) + "," + String(myGNSS.getAltitude()) + "," + String(myGNSS.getSIV()) + "," + String("LS_CMD");
+        
         transmitPacket(toTransmit);
         packetsTransmitted++;
         timeSinceLastTransmission = 0;
         backupPackets(packetsTransmitted);
 
         openLatch();
-        latchServo.write(180);
       }
   }
 
