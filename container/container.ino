@@ -5,6 +5,7 @@
 #include <math.h>
 #include <EEPROM.h>
 #include <Servo.h>
+#include <SparkFun_u-blox_GNSS_Arduino_Library.h> //GNSS Library
 
 #define latchPin 6
 
@@ -32,8 +33,10 @@ int blinkDelay = 500;
 int ledOn = 1;
 
 //BNO Instance
-
 Adafruit_BNO055 bno = Adafruit_BNO055(55, 0x28, &Wire2);
+
+//GPS instantiation
+SFE_UBLOX_GNSS myGNSS;
 
 //Various logic variables
 boolean simulationMode = false;
@@ -76,7 +79,6 @@ float MBA_To_Altitude_Meters(float millbars) {
 }
 
 void transmitPacket(String transmit) {
-  Serial1.println(transmit);
   Serial.println(transmit);
   Serial2.println(transmit);
   Serial5.println(transmit);
@@ -93,10 +95,10 @@ void openLatch() {
 }
 
 void setup(){
-  Serial1.begin(9600);
   Serial.begin(9600);
-  Serial2.begin(9600);
+  Serial2.begin(9600); //Container to groundstation
   Serial5.begin(9600); //Container to payload
+  Serial4.begin(9600); //GPS UART
 
   //LED setup
   pinMode(ledPin, OUTPUT);
@@ -112,6 +114,15 @@ void setup(){
     /* There was a problem detecting the BNO055 ... check your connections */
     Cansat_Raise_Issue("BNO Error");
     //while(1);
+  }
+
+  if(!myGNSS.begin(Serial4))
+  {
+    //Check for GPS
+    Cansat_Raise_Issue("GNSS Error");
+  } else {
+    myGNSS.setUART1Output(COM_TYPE_UBX);
+    myGNSS.saveConfiguration();
   }
 
   //Test that our MS is working
@@ -150,6 +161,39 @@ void getDataFromPC() {
   if(Serial2.available() > 0) {
 
     char x = Serial2.read();
+
+      // the order of these IF clauses is significant
+      
+    if (x == endMarker) {
+      readInProgress = false;
+      newDataFromPC = true;
+      inputBuffer[bytesRecvd] = 0;
+      processCommand(inputBuffer);
+      transmitPacket("boop");
+    }
+    
+    if(readInProgress) {
+      inputBuffer[bytesRecvd] = x;
+      bytesRecvd ++;
+      if (bytesRecvd == buffSize) {
+        bytesRecvd = buffSize - 1;
+      }
+    }
+
+    if (x == startMarker) { 
+      bytesRecvd = 0; 
+      readInProgress = true;
+    }
+  }
+}
+
+void getDataFromPC_wired() {
+
+  // receive data from PC and save it into inputBuffer
+    
+  if(Serial.available() > 0) {
+
+    char x = Serial.read();
 
       // the order of these IF clauses is significant
       
@@ -236,7 +280,7 @@ void loop() {
   //Should we transmit?
   if (timeSinceLastTransmission > transmissionInterval) {
       String toTransmit;
-      String cMode = "";
+      String cMode = "C";
       if (simulationMode) {
         String cMode = "S";
       } else {
@@ -247,8 +291,14 @@ void loop() {
       if (payloadReleased) {
         String tp_released = "R";
       }
-      
-      toTransmit = "1091," + String("timePlaceholder") + "," + String(packetsTransmitted) + "," + cMode + "," + tp_released + "," + String(realAltitude) + "," + String(temperature) + "," + "3.3v" + "," + String(x_orientation) + "," + String(y_orientation) + "," + String(z_orientation) + "," + String(x_accel) + "," + String(y_accel) + "," + String(z_accel) + "," + "magPlaceHolder_x,magPlaceHolder_y,magPlaceHolder_z,pointingErrorPlaceHolder," + flight_state;
+
+      long longitude = myGNSS.getLongitude();
+      long latitude = myGNSS.getLatitude();
+
+      float gpsLat = latitude / 10000000;
+      float gpsLong = longitude / 10000000;
+      toTransmit = "1091," + String("timePlaceholder") + "," + String(packetsTransmitted) + "," + cMode + "," + tp_released + "," + String(realAltitude) + "," + String(temperature) + "," + "3.3v" + "," + "GPS Time" + "," + String(gpsLat);
+      toTransmit = toTransmit + "," + String(gpsLong) + "," + String(myGNSS.getAltitude()) + "," + String(myGNSS.getSIV()) + "," + String("LS_CMD");
       if (transmitting) { 
         transmitPacket(String(MS5611.getTemperature()));
         transmitPacket(toTransmit);
@@ -275,9 +325,9 @@ void loop() {
   }
 
   //State Machine
-  if (flight_state == "PS_STANDBY") {
-    if (vertVel > 0.03) {
-      flight_state = "PS_FLIGHT";
+  if (flight_state == "FS_READY") {
+    if (vertVel > 2) {
+      flight_state = "FS_FLIGHT";
     }
   } else if (flight_state == "PS_FLIGHT") {
     if (realAltitude > 350) {
