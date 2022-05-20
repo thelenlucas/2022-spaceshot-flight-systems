@@ -183,9 +183,11 @@ void loop() {
   
   sensors_event_t event;
   sensors_event_t linearAccelData;
+  sensors_event_t magData;
   
   bno.getEvent(&event);
   bno.getEvent(&linearAccelData, Adafruit_BNO055::VECTOR_LINEARACCEL);
+  bno.getEvent(&magData, Adafruit_BNO055::VECTOR_MAGNETOMETER);
 
   //How we read orientation
   float x_orientation = event.orientation.x;
@@ -195,6 +197,10 @@ void loop() {
   float x_accel = linearAccelData.acceleration.x;
   float y_accel = linearAccelData.acceleration.y;
   float z_accel = linearAccelData.acceleration.z;
+
+  float x_mag = magData.magnetic.x;
+  float y_mag = magData.magnetic.x;
+  float z_mag = magData.magnetic.x;
 
   //Parse data shit
   getDataFromPC();
@@ -225,7 +231,8 @@ void loop() {
         String tp_released = "R";
       }
       
-      toTransmit = "1091," + String("timePlaceholder") + "," + String(packetsTransmitted) + "," + cMode + "," + String(realAltitude) + "," + String(temperature) + "," + "3.3v" + "," + String(x_orientation) + "," + String(y_orientation) + "," + String(z_orientation) + "," + String(x_accel) + "," + String(y_accel) + "," + String(z_accel) + "," + "magPlaceHolder_x,magPlaceHolder_y,magPlaceHolder_z,pointingErrorPlaceHolder," + flight_state;
+      toTransmit = "1091," + String("timePlaceholder") + "," + String(packetsTransmitted) + "," + cMode + "," + String(realAltitude) + "," + String(temperature) + "," + "3.3v" + "," + String(x_orientation) + "," + String(y_orientation) + "," + String(z_orientation) + "," + String(x_accel) + "," + String(y_accel) + "," + String(z_accel) + ",";
+      toTransmit << "a";
       if (transmitting) { 
         transmitPacket(toTransmit);
         packetsTransmitted++;

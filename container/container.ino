@@ -220,6 +220,8 @@ void getDataFromPC_wired() {
   }
 }
 
+void reset_payload();
+
 //CMD,1091,CX,ON
 void processCommand(String com) {
   if (com == "RST_PACKET") {
@@ -233,11 +235,16 @@ void processCommand(String com) {
       transmitting = false;
     }
     
-  } else if (com
+  } else if (com.substring(9,11) == "RS") {
+    reset_payload();
+  }
 
 
   transmitPacket(com.substring(12,14));
 }
+
+void drop_payload() {}
+void land_container() {}
 
 void loop() {
   //Methods for determining time passage
@@ -335,27 +342,24 @@ void loop() {
   }
 
   //State Machine
-  if (flight_state == "FS_READY") {
-    if (vertVel > 2) {
-      flight_state = "FS_FLIGHT";
+  if (flight_state == "FS_STANDBY") {
+    //Transition missing - Taken care of via command
+  } else if (flight_state == "FS_ASCENT") {
+    if (vertVel < -1) {
+      flight_state = "FS_DESCENT";
     }
-  } else if (flight_state == "PS_FLIGHT") {
-    if (realAltitude > 350) {
-      flight_state = "PS_PREPARE";
+  } else if (flight_state == "FS_DESCENT") {
+    if (realAltitude < 400) {
+      drop_payload();
+      flight_state = "FS_LANDING";
     }
-  } else if (flight_state == "PS_PREPARE") {
-    if (realAltitude < 300) {
-      flight_state = "PS_OPERATIONS";
-    }
-  } else if (flight_state == "PS_OPERATIONS") {
+  } else if (flight_state == "FS_LANDING") {
     if (realAltitude < 10) {
-      flight_state = "PS_LANDED";
-      transmitting = false;
-      blinking = true;
+      flight_state = "FS_LANDED";
+      land_container();
     }
   }
 
   //Delay for clarity
   delay(1);
-  
 }
