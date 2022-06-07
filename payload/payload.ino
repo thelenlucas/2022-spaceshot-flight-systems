@@ -5,6 +5,8 @@
 #include <math.h>
 #include <EEPROM.h>
 #include <SparkFun_TB6612.h>
+#include <TimeLib.h>
+#include <DS1307RTC.h>
 
 //Pin Reads
 int PhaseA = 16;
@@ -99,7 +101,7 @@ void transmitPacket(String transmit) {
 }
 
 void setup(){
-  Serial.begin(9600);
+  Serial.begin(115200);
   Serial8.begin(115200);
 
   //Motor Setup
@@ -135,7 +137,7 @@ void setup(){
   
   bno.setExtCrystalUse(true);
 }
-
+bool transmissionNeeded = false;
 const byte buffSize = 40;
 char inputBuffer[buffSize];
 const char startMarker = '{';
@@ -176,11 +178,46 @@ void getDataFromPC() {
   }
 }
 
+void getDataFromPC_wired() {
+
+  // receive data from PC and save it into inputBuffer
+    
+  if(Serial.available() > 0) {
+
+    char x = Serial.read();
+
+      // the order of these IF clauses is significant
+      
+    if (x == endMarker) {
+      readInProgress = false;
+      newDataFromPC = true;
+      inputBuffer[bytesRecvd] = 0;
+      processCommand(inputBuffer);
+    }
+    
+    if(readInProgress) {
+      inputBuffer[bytesRecvd] = x;
+      bytesRecvd ++;
+      if (bytesRecvd == buffSize) {
+        bytesRecvd = buffSize - 1;
+      }
+    }
+
+    if (x == startMarker) { 
+      bytesRecvd = 0; 
+      readInProgress = true;
+    }
+  }
+}
+
 void processCommand(String com) {
   if (com == "DROP") {
     flight_state = "O";
     transmitting = true;
+  } else if (com == "T") {
+    transmissionNeeded = true;
   }
+  Serial8.println(com + ";");
 }
 
 //Motor Variables
@@ -194,6 +231,7 @@ int lastB = 0;
 float targetAngle = 90;
 
 void loop() {
+  
   //Methods for determining time passage
   deltaTime = millis() - lastExecutionTime;
   lastExecutionTime = millis();
@@ -264,6 +302,7 @@ void loop() {
 
   //Parse data shit
   getDataFromPC();
+  getDataFromPC_wired();
   //Reading pressure
   MS5611.read();
   float pressure = MS5611.getPressure();
@@ -292,16 +331,20 @@ void loop() {
       }
 
       float voltage = analogRead(A0) * (3.3/1023.0);
+
+      setSyncProvider(RTC.get);
+      RTC.set(1653494690);
       
-      toTransmit = String(realAltitude) + "," + String(temperature) + "," + String(voltage) + "," + String(x_orientation) + "," + String(y_orientation) + "," + String(z_orientation);
+      toTransmit = "1091," + String(hour()) + ":" + String(minute()) + ":" + String(second()) + "," + String(packetsTransmitted) + "," + "P," + String(realAltitude) + "," + String(temperature) + "," + String(voltage) + "," + String(x_orientation) + "," + String(y_orientation) + "," + String(z_orientation);
       toTransmit = toTransmit + "," + String(x_accel) + "," + String(y_accel) + "," + String(z_accel) + "," + String(x_mag) + "," + String(y_mag) + "," + String(z_mag) + ",0," + flight_state;
       
-      if (transmitting) { 
+      if (true) { 
         transmitPacket(toTransmit);
         packetsTransmitted++;
         timeSinceLastTransmission = 0;
         backupPackets(packetsTransmitted);
       }
+      transmissionNeeded = false;
   }
 
   //Should we blink?
@@ -323,7 +366,7 @@ void loop() {
   } else if (flight_state == "O") {
     if (realAltitude < 10) {
       flight_state = "L";
-      transmitting = false;
+      transmitting = true;
       blinking = true;
       digitalWrite(2, HIGH);
     }

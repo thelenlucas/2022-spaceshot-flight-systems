@@ -26,7 +26,9 @@ Motor tetherMotor = Motor(AIN1, AIN2, PWMA, 35, STBY);
 
 //Data for keeping track of various times
 int timeSinceLastTransmission = 0;
-int transmissionInterval = 1000;
+int transmissionInterval = 250;
+int payloadInterval = 250;
+int timeSinceLastPayload = 0;
 int deltaTime;
 int lastExecutionTime = 0;
 
@@ -44,7 +46,7 @@ float lastAltitude = 0;
 boolean blinking = true;
 int timeSinceLastBlink = 0;
 int ledPin = 13;
-int blinkDelay = 500;
+int blinkDelay = transmissionInterval/2;
 int ledOn = 1;
 
 //BNO Instance
@@ -72,26 +74,88 @@ void Cansat_Raise_Issue(char *issue) {
 //Backup Variables
 int packetAdress = 0;
 int addOffset = 0;
-int timeAdressOffset = 100;
-
-void backupPackets(int numberOfPackets) {
-  EEPROM.put(packetAdress + addOffset, numberOfPackets);
-}
+int backupStateOffset = 5;
 
 void set_clock(time_t t) {
   RTC.set(t);
   setTime(t);
-  backupTime(t);
 }
 
-void backupTime(time_t tTime) {
-  EEPROM.put(packetAdress + addOffset + timeAdressOffset, tTime);
+void backupAltitudeOffset (float a) {
+  EEPROM.put(packetAdress + addOffset + backupStateOffset*2, a);
 }
 
-time_t restoreTime() {
-  int out = 0;
-  EEPROM.get(packetAdress + addOffset + timeAdressOffset, out);
+float restoreAltitudeOffset () {
+  float n;
+  EEPROM.get(packetAdress + addOffset + backupStateOffset*2, n);
+  if (n == -3.14) {
+    offsetNeeded = true;
+  }
+  return n;
+}
+
+void clearAltitudeOffset () {
+  EEPROM.put(packetAdress + addOffset + backupStateOffset*2, -3.14);
+}
+
+//Clock Backups
+void backupTime (time_t a) {
+  float n = a;
+  EEPROM.put(packetAdress + addOffset + backupStateOffset*3, n);
+}
+
+time_t restoreTime () {
+  float n;
+  EEPROM.get(packetAdress + addOffset + backupStateOffset*3, n);
+  time_t t = n;
+  return t;
+}
+
+void backupState (String state) {
+  int saveInt;
+  if (state == "FS_STANDBY") {
+    saveInt = 0;
+  } else if (state == "FS_ASCENT") {
+    saveInt = 1;
+  } else if (state == "FS_PEAK") {
+    saveInt = 2;
+  } else if (state == "FS_LANDING") {
+    saveInt = 3;
+  } else if (state == "FS_LANDED") {
+    saveInt = 4;
+  }
+
+  EEPROM.put(packetAdress + addOffset + backupStateOffset, saveInt);
+}
+
+String restoreState() {
+  int i;
+
+  EEPROM.get(packetAdress + addOffset + backupStateOffset, i);
+
+  String out;
+
+  if (i == 0) {
+    out = "FS_STANDBY";
+  } else if (i==1) {
+    out = "FS_ASCENT";
+  } else if (i==2) {
+    out = "FS_PEAK";
+  } else if (i==3) {
+    out = "FS_LANDING";
+  } else if (i==4) {
+    out = "FS_LANDED";
+  }
+
   return out;
+}
+
+void clearState () {
+  EEPROM.put(packetAdress + addOffset + backupStateOffset, 0);
+}
+
+void backupPackets(int numberOfPackets) {
+  EEPROM.put(packetAdress + addOffset, numberOfPackets);
 }
 
 int restorePackets(){
@@ -112,7 +176,7 @@ float MBA_To_Altitude_Meters(float millbars) {
 
 void transmitPacket(String transmit) {
   Serial.println(transmit);
-   Serial5.println(transmit);  
+  Serial8.println(transmit);  
 }
 
 void transmitPayload(String transmit) {
@@ -133,10 +197,10 @@ void openLatch() {
 void setup(){
   setSyncProvider(RTC.get);
   
-  set_clock(1653494690);
+  set_clock(restoreTime());
   
   Serial.begin(115200);
-  Serial2.begin(115200); //Container to groundstation
+  Serial8.begin(115200); //Container to groundstation
   Serial5.begin(115200); //Container to payload
   Serial4.begin(9600); //GPS UART
 
@@ -168,7 +232,7 @@ void setup(){
   uint8_t scl = 24;
   uint8_t sda = 25;
   //&Wire2
-  if (MS5611.begin(&Wire2) == true)
+  if (MS5611.begin() == true)
   {
   } else {
     Cansat_Raise_Issue("MS ERROR");
@@ -180,6 +244,9 @@ void setup(){
 
   //Restore packets
   packetsTransmitted = restorePackets();
+  //Restore State
+  flight_state = restoreState();
+  
   bno.setExtCrystalUse(true);
 }
 
@@ -195,9 +262,9 @@ void getDataFromPC() {
 
   // receive data from PC and save it into inputBuffer
     
-  if(Serial2.available() > 0) {
+  if(Serial8.available() > 0) {
 
-    char x = Serial2.read();
+    char x = Serial8.read();
 
       // the order of these IF clauses is significant
       
@@ -272,48 +339,57 @@ void getDataFromPayload() {
   }
 }
 
-void reset_payload(){
-  clearPackets();
-  restorePackets();
-};
-
 float pressure;
 float temperature;
+bool simEnabled = false;
+String lastCommand = "NULL_CMD";
 
 //CMD,1091,CX,ON
 void processCommand(String com) {
-  transmitPacket(com.substring(9, 13));
   if (com == "RST_PACKET") {
+    lastCommand = com;
     clearPackets();
     packetsTransmitted = 0;
   } else if (com.substring(9,11) == "CX") {
     //Telemetry ON/OFF
     if (com.substring(12,14) == "ON") {
+      lastCommand = "CX_ON";
       transmitting = true;
     } else if (com.substring(12, 15) == "OFF") {
+      lastCommand = "CX_OFF";
       transmitting = false;
     }
     
   } else if (com.substring(9,11) == "RS") {
     reset_payload();
+    lastCommand = "RS";
     
   } else if (com.substring(9, 12) == "SIM" && com.substring(9, 13) != "SIMP") {
-    if (com.substring(13, 16) == "ON") {
-      simulationMode = true;
-      pressure = 0;
-      altitudeOffset = 0;
-      offsetNeeded = true;
-    } else if (com.substring(13, 17) == "OFF") {
+    if (com.substring(13, com.length()) == "ACTIVATE") {
+      if (simEnabled) {
+        lastCommand = "SIM_ACTIVATE";
+        simulationMode = true;
+        pressure = 0;
+        altitudeOffset = 0;
+        offsetNeeded = true;
+      }
+    } else if (com.substring(13, com.length()) == "DISABLE") {
+      lastCommand = "SIM_DISABLE";
       simulationMode = false;
       offsetNeeded = true;
+      simEnabled = false;
+      
+    } else if (com.substring(13, com.length()) == "ENABLE") {
+      lastCommand = "SIM_ENABLE";
+      simEnabled = true;
     }
     
   } else if (com.substring(9, 13) == "SIMP") {
+    lastCommand = "SIMP";
     String toNumber = com.substring(14, com.length());
     char char_array[toNumber.length() + 1];
     strcpy(char_array, toNumber.c_str());
     int n = atoi(char_array);
-    transmitPacket(n);
 
     if (simulationMode) {
       pressure = n;
@@ -323,18 +399,52 @@ void processCommand(String com) {
       }
     }
     
+  } else if (com.substring(9, 11) == "ST") {
+    String toNumber = com.substring(12, com.length());
+    lastCommand = "ST";
+    char ar[toNumber.length() + 1];
+    strcpy(ar, toNumber.c_str());
+    int n = atoi(ar);
+    time_t converted = n;
+    set_clock(converted);
+    
   } else if (com == "PRESSURE") {
     altitudeOffset = MBA_To_Altitude_Meters(pressure);
+    
+  } else if (com.substring(9, 12) == "RST") {
+    lastCommand = "RST";
+    reset_payload();
+    
+  } else if (com.substring(9, 12) == "DRP") {
+    lastCommand = "DRP";
+    drop_payload();
+    flight_state = "FS_LANDING";
+    backupState(flight_state);
   }
 }
 
 void drop_payload() {
   Serial5.println("{DROP}");
   payloadReleased = true;
+  tetherMotor.drive(50);
 }
+
 void land_container() {
   transmitting = true;
+  digitalWrite(0, HIGH);
+  digitalWrite(1, HIGH);
 }
+
+void reset_payload(){
+  clearPackets();
+  packetsTransmitted = restorePackets();
+
+  clearState();
+  flight_state = restoreState();
+
+  clearAltitudeOffset();
+  offsetNeeded = true;
+};
 
 void loop() {
   //Methods for determining time passage
@@ -349,7 +459,6 @@ void loop() {
 
   sensors_event_t event;
   sensors_event_t linearAccelData;
-
 
   MS5611.read();
   if (!simulationMode) {
@@ -366,10 +475,9 @@ void loop() {
     }
   }
 
-  
   //Parse data shit
   getDataFromPC();
-  //getDataFromPC_wired();
+  getDataFromPC_wired();
   getDataFromPayload();
   
   float realAltitude = MBA_To_Altitude_Meters(pressure) - altitudeOffset;
@@ -382,26 +490,7 @@ void loop() {
   
   //Should we transmit?
   if (timeSinceLastTransmission > transmissionInterval) {
-      
-      
-
-      MS5611.read();
-      if (!simulationMode) {
-        pressure = MS5611.getPressure();
-      }
-    
-      temperature = MS5611.getTemperature();
-
-      
-      //How we read orientation
-      float x_orientation = event.orientation.x;
-      float y_orientation = event.orientation.y;
-      float z_orientation = event.orientation.z;
-    
-      float x_accel = linearAccelData.acceleration.x;
-      float y_accel = linearAccelData.acceleration.y;
-      float z_accel = linearAccelData.acceleration.z;
-      
+   
       String toTransmit;
       String cMode = "C";
       if (simulationMode) {
@@ -415,8 +504,6 @@ void loop() {
         String tp_released = "R";
       }
 
-      
-      
       if (transmitting) { 
         long longitude;
         long latitude;
@@ -439,6 +526,10 @@ void loop() {
           sats = myGNSS.getSIV();
 
           alti = myGNSS.getAltitude();
+        } else {
+          gpsHour = "00";
+          gpsMinute = "00";
+          gpsSecond = "00";
         }
 
         millisTime = millis();
@@ -451,16 +542,24 @@ void loop() {
 
         toTransmit = "1091," + String(hour()) + ":" + String(minute()) + ":" + String(second());
         toTransmit += "," + String(packetsTransmitted) + "," + cMode + "," + tp_released + "," + String(realAltitude) + "," + String(temperature) + "," + String(voltage) + ",";
-        toTransmit = toTransmit + gpsTime + "," + String(gpsLat) +  "," + String(gpsLong) + "," + String(alti) + "," + String(sats) + "," + flight_state + "," + String("LS_CMD");
-
-        
+        toTransmit = toTransmit + gpsTime + "," + String(gpsLat) +  "," + String(gpsLong) + "," + String(alti) + "," + String(sats) + "," + flight_state + "," + lastCommand;
         
         transmitPacket(toTransmit);
         
         packetsTransmitted++;
         timeSinceLastTransmission = 0;
         backupPackets(packetsTransmitted);
+        backupTime(now());
       }
+  }
+
+  timeSinceLastPayload += deltaTime;
+  if (timeSinceLastPayload > payloadInterval) {
+    timeSinceLastPayload = 0;
+    if (flight_state == "FS_LANDED") {
+      Serial5.println("{T}");
+      Serial8.println("Transmitted");
+    }
   }
 
   //Should we blink?
@@ -492,18 +591,14 @@ void loop() {
     }
   } else if (flight_state == "FS_LANDING") {
     if (realAltitude < 350) {
-      tetherMotor.drive(50);
       drop_payload();
     }
     if (realAltitude < 10) {
       flight_state = "FS_LANDED";
       land_container();
-      digitalWrite(0, HIGH);
-      digitalWrite(1, HIGH);
     }
   }
 
-  Serial2.println(millisTime1 - millisTime);
+  backupState(flight_state);
   //Delay for clarity
-  delay(1);
 }
