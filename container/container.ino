@@ -14,7 +14,7 @@
 #include <DS1307RTC.h>
 #include <SparkFun_TB6612.h>
 
-#define latchPin 5
+#define latchPin 6
 
 //Motor Instantiations
 #define AIN1 11
@@ -26,7 +26,7 @@ Motor tetherMotor = Motor(AIN1, AIN2, PWMA, 35, STBY);
 
 //Data for keeping track of various times
 int timeSinceLastTransmission = 0;
-int transmissionInterval = 250;
+int transmissionInterval = 1000;
 int payloadInterval = 250;
 int timeSinceLastPayload = 0;
 int deltaTime;
@@ -64,6 +64,12 @@ float altitudeOffset; //Offsett for calibration
 bool offsetNeeded = true;
 
 LM92 lm92; //Temperature Sensor
+
+String timeConvert(int n) {
+  String o = String(n);
+  if (o.length() != 2) {o = "0" + o;}
+  return o;
+}
 
 void Cansat_Raise_Issue(char *issue) {
   Serial.print("Issue Raised: ");
@@ -176,12 +182,13 @@ float MBA_To_Altitude_Meters(float millbars) {
 
 void transmitPacket(String transmit) {
   Serial.println(transmit);
-  Serial8.println(transmit);  
+  Serial2.println(transmit);  
+  //Serial5.println(transmit);
 }
 
 void transmitPayload(String transmit) {
-  String toTransmit = "1091," + String(hour()) + ":" + String(minute()) + ":" + String(second());
-  toTransmit += "," + String(packetsTransmitted) + "," + "P" + "," + transmit;
+  String toTransmit = "1091," + timeConvert(hour()) + ":" + timeConvert(minute()) + ":" + timeConvert(second());
+  toTransmit += "," + String(packetsTransmitted) + "," + "T" + "," + transmit;
   transmitPacket(toTransmit);
   packetsTransmitted++;
 }
@@ -200,7 +207,7 @@ void setup(){
   set_clock(restoreTime());
   
   Serial.begin(115200);
-  Serial8.begin(115200); //Container to groundstation
+  Serial2.begin(115200); //Container to groundstation
   Serial5.begin(115200); //Container to payload
   Serial4.begin(9600); //GPS UART
 
@@ -232,7 +239,7 @@ void setup(){
   uint8_t scl = 24;
   uint8_t sda = 25;
   //&Wire2
-  if (MS5611.begin() == true)
+  if (MS5611.begin(&Wire2) == true)
   {
   } else {
     Cansat_Raise_Issue("MS ERROR");
@@ -262,9 +269,9 @@ void getDataFromPC() {
 
   // receive data from PC and save it into inputBuffer
     
-  if(Serial8.available() > 0) {
+  if(Serial2.available() > 0) {
 
-    char x = Serial8.read();
+    char x = Serial2.read();
 
       // the order of these IF clauses is significant
       
@@ -339,10 +346,18 @@ void getDataFromPayload() {
   }
 }
 
+int strToInt(String s) {
+  char char_array[s.length() + 1];
+  strcpy(char_array, s.c_str());
+  int n = atoi(char_array);
+  return n;
+}
+
 float pressure;
 float temperature;
 bool simEnabled = false;
 String lastCommand = "NULL_CMD";
+bool latchOverride = false;
 
 //CMD,1091,CX,ON
 void processCommand(String com) {
@@ -407,6 +422,8 @@ void processCommand(String com) {
     int n = atoi(ar);
     time_t converted = n;
     set_clock(converted);
+
+    setTime(strToInt(com.substring(12, 14)), strToInt(com.substring(15, 17)),strToInt(com.substring(18, 20)),10,6,2022);
     
   } else if (com == "PRESSURE") {
     altitudeOffset = MBA_To_Altitude_Meters(pressure);
@@ -419,12 +436,24 @@ void processCommand(String com) {
     lastCommand = "DRP";
     drop_payload();
     flight_state = "FS_LANDING";
+    Serial5.println("{DROP}");
     backupState(flight_state);
+  } else if (com.substring(9, 11) == "PR") {
+    Serial5.println("{" + com.substring(12, com.length()) + "}");
+  } else if (com.substring(9, 11) == "LT") {
+    if (latchOverride) {latchOverride = false;} else {latchOverride = true;}
+  } else if (com.substring(9, 11) == "PT") {
+    Serial5.println("L");
   }
 }
 
+bool dropNeeded = true;
+
 void drop_payload() {
-  Serial5.println("{DROP}");
+  if (dropNeeded) {
+    Serial5.println("{DROP}");
+    dropNeeded = false;
+  }
   payloadReleased = true;
   tetherMotor.drive(50);
 }
@@ -479,6 +508,7 @@ void loop() {
   getDataFromPC();
   getDataFromPC_wired();
   getDataFromPayload();
+
   
   float realAltitude = MBA_To_Altitude_Meters(pressure) - altitudeOffset;
   
@@ -540,7 +570,7 @@ void loop() {
         float gpsLong = longitude / 10000000;
         float voltage = analogRead(A2) * (3.3/1023.0);
 
-        toTransmit = "1091," + String(hour()) + ":" + String(minute()) + ":" + String(second());
+        toTransmit = "1091," + timeConvert(hour()) + ":" + timeConvert(minute()) + ":" + timeConvert(second());
         toTransmit += "," + String(packetsTransmitted) + "," + cMode + "," + tp_released + "," + String(realAltitude) + "," + String(temperature) + "," + String(voltage) + ",";
         toTransmit = toTransmit + gpsTime + "," + String(gpsLat) +  "," + String(gpsLong) + "," + String(alti) + "," + String(sats) + "," + flight_state + "," + lastCommand;
         
@@ -556,9 +586,9 @@ void loop() {
   timeSinceLastPayload += deltaTime;
   if (timeSinceLastPayload > payloadInterval) {
     timeSinceLastPayload = 0;
-    if (flight_state == "FS_LANDED") {
+    if (flight_state == "FS_LANDING") {
       Serial5.println("{T}");
-      Serial8.println("Transmitted");
+      Serial.println("Transmitted");
     }
   }
 
@@ -577,26 +607,38 @@ void loop() {
 
   //State Machine
   if (flight_state == "FS_STANDBY") {
+    latchServo.write(155);
     if (realAltitude > 100) {
       flight_state = "FS_ASCENT";
+      
     }
   } else if (flight_state == "FS_ASCENT") {
     if (realAltitude > 650) {
       flight_state = "FS_PEAK";
+      latchServo.write(155);
     }
   } else if (flight_state == "FS_PEAK") {
     if (realAltitude < 400) {
       flight_state = "FS_LANDING";
-      latchServo.write(65);
+      latchServo.write(155);
     }
   } else if (flight_state == "FS_LANDING") {
     if (realAltitude < 350) {
-      drop_payload();
+      latchServo.write(175);
+      if (dropNeeded) {
+        
+        drop_payload();
+        dropNeeded = false;
+      }
     }
-    if (realAltitude < 10) {
+    if (realAltitude < -100) {
       flight_state = "FS_LANDED";
       land_container();
     }
+  }
+
+  if (latchOverride == true) {
+    latchServo.write(175);
   }
 
   backupState(flight_state);
