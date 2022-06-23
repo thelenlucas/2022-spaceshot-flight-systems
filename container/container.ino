@@ -2,7 +2,7 @@
 #include <Wire.h>
 #include <Adafruit_BNO055.h>
 #include <LM92.h>
-#include <MS5611.h>
+#include "MS5611.h"
 #include <math.h>
 #include <EEPROM.h>
 #include <Servo.h>
@@ -27,7 +27,7 @@ Motor tetherMotor = Motor(AIN1, AIN2, PWMA, 35, STBY);
 //Data for keeping track of various times
 int timeSinceLastTransmission = 0;
 int transmissionInterval = 1000;
-int payloadInterval = 250;
+int payloadInterval = 200;
 int timeSinceLastPayload = 0;
 int deltaTime;
 int lastExecutionTime = 0;
@@ -201,6 +201,12 @@ void closeLatch() {
 void openLatch() {
 }
 
+void land_container() {
+  transmitting = true;
+  digitalWrite(0, HIGH);
+  digitalWrite(1, HIGH);
+}
+
 void setup(){
   setSyncProvider(RTC.get);
   
@@ -218,14 +224,6 @@ void setup(){
   latchServo.attach(latchPin);
   latchServo.write(35);
 
-  //Test that our BNO is working
-  if(!bno.begin())
-  {
-    /* There was a problem detecting the BNO055 ... check your connections */
-    Cansat_Raise_Issue("BNO Error");
-    //while(1);
-  }
-
   if(!myGNSS.begin(Serial4))
   {
     //Check for GPS
@@ -238,12 +236,6 @@ void setup(){
   //Test that our MS is working
   uint8_t scl = 24;
   uint8_t sda = 25;
-  //&Wire2
-  if (MS5611.begin(&Wire2) == true)
-  {
-  } else {
-    Cansat_Raise_Issue("MS ERROR");
-  }
   
   lm92.ResultInCelsius = true;
 
@@ -253,6 +245,14 @@ void setup(){
   packetsTransmitted = restorePackets();
   //Restore State
   flight_state = restoreState();
+
+  delay(1000);
+  //&Wire2
+  if (MS5611.begin(&Wire2) == true)
+  {
+  } else {
+    Cansat_Raise_Issue("MS ERROR");
+  }
   
   bno.setExtCrystalUse(true);
 }
@@ -346,6 +346,10 @@ void getDataFromPayload() {
   }
 }
 
+void triggerCamera() {
+  //Trigger high for 150ms
+}
+
 int strToInt(String s) {
   char char_array[s.length() + 1];
   strcpy(char_array, s.c_str());
@@ -358,6 +362,8 @@ float temperature;
 bool simEnabled = false;
 String lastCommand = "NULL_CMD";
 bool latchOverride = false;
+bool tetherGoingOut = false;
+bool tetherGoingIn = false;
 
 //CMD,1091,CX,ON
 void processCommand(String com) {
@@ -434,34 +440,37 @@ void processCommand(String com) {
     
   } else if (com.substring(9, 12) == "DRP") {
     lastCommand = "DRP";
-    drop_payload();
+    //drop_payload();
     flight_state = "FS_LANDING";
     Serial5.println("{DROP}");
     backupState(flight_state);
+    drop_payload();
   } else if (com.substring(9, 11) == "PR") {
     Serial5.println("{" + com.substring(12, com.length()) + "}");
   } else if (com.substring(9, 11) == "LT") {
     if (latchOverride) {latchOverride = false;} else {latchOverride = true;}
   } else if (com.substring(9, 11) == "PT") {
-    Serial5.println("L");
+    Serial5.println("{L}");
+  } else if (com.substring(9, 11) == "PO") {
+    tetherGoingOut = true;
+  } else if (com.substring(9, 11) == "PI") {
+    tetherGoingIn = true;
   }
 }
 
 bool dropNeeded = true;
+int timeSpentOut = 0;
+int timeSpentIn = 0;
 
 void drop_payload() {
   if (dropNeeded) {
     Serial5.println("{DROP}");
     dropNeeded = false;
+    
   }
   payloadReleased = true;
-  tetherMotor.drive(50);
-}
-
-void land_container() {
-  transmitting = true;
-  digitalWrite(0, HIGH);
-  digitalWrite(1, HIGH);
+  //tetherMotor.drive(50);
+  
 }
 
 void reset_payload(){
@@ -545,7 +554,7 @@ void loop() {
         int sats;
 
         millisTime1 = millis();
-        if (false) {
+        if (true) {
           longitude = myGNSS.getLongitude();
           latitude = myGNSS.getLatitude();
 
@@ -607,7 +616,7 @@ void loop() {
 
   //State Machine
   if (flight_state == "FS_STANDBY") {
-    latchServo.write(155);
+    latchServo.write(140);
     if (realAltitude > 100) {
       flight_state = "FS_ASCENT";
       
@@ -615,12 +624,13 @@ void loop() {
   } else if (flight_state == "FS_ASCENT") {
     if (realAltitude > 650) {
       flight_state = "FS_PEAK";
-      latchServo.write(155);
+      latchServo.write(140);
+      triggerCamera();
     }
   } else if (flight_state == "FS_PEAK") {
     if (realAltitude < 400) {
       flight_state = "FS_LANDING";
-      latchServo.write(155);
+      latchServo.write(140);
     }
   } else if (flight_state == "FS_LANDING") {
     if (realAltitude < 350) {
@@ -631,7 +641,8 @@ void loop() {
         dropNeeded = false;
       }
     }
-    if (realAltitude < -100) {
+    if (realAltitude < 10) {
+      triggerCamera();
       flight_state = "FS_LANDED";
       land_container();
     }
@@ -639,8 +650,26 @@ void loop() {
 
   if (latchOverride == true) {
     latchServo.write(175);
+  } else {
+    latchServo.write(140);
+  }
+
+  if (tetherGoingOut == true) {
+    tetherMotor.drive(25);
+    timeSpentOut += deltaTime;
+    if (timeSpentOut >= 2000) {
+      tetherMotor.drive(0);
+      tetherGoingOut = false;
+    }
+  } else if (tetherGoingIn == true) {
+    tetherMotor.drive(25);
+    timeSpentIn += deltaTime;
+    if (timeSpentIn >= 1750) {
+      tetherMotor.drive(0);
+      tetherGoingIn = false;
+    }
   }
 
   backupState(flight_state);
-  //Delay for clarity
+  //Delay for clarity, maybe?
 }

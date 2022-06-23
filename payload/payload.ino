@@ -23,8 +23,8 @@ int ReadOutB = 0;
 #define PWMA 23
 #define STBY 22
 
-int latchedDegree;
-int unlatchedDegree;
+int latchedDegree = -10;
+int unlatchedDegree = 0;
 
 const int offsetA = 1;
 const int offsetB = 1;
@@ -33,7 +33,7 @@ Motor motor1 = Motor(AIN1, AIN2, PWMA, offsetA, STBY);
 
 //Data for keeping track of various times
 int timeSinceLastTransmission = 0;
-int transmissionInterval = 250;
+int transmissionInterval = 100;
 int deltaTime;
 int lastExecutionTime = 0;
 
@@ -99,17 +99,26 @@ float MBA_To_Altitude_Meters(float millbars) {
 }
 
 void transmitPacket(String transmit) {
-  for (int i = 0; i != transmit.length(); i++) {
-    Serial8.print(transmit[i]);
-  }
+  Serial8.print(transmit);
   Serial8.print("\n");
   Serial.println(transmit);
+}
+
+void toggleCam() {
+  digitalWrite(3,LOW);
+  delay(1000);
+  digitalWrite(3,HIGH);
 }
 
 
 Servo latchServo;
 
 void setup(){
+  
+  digitalWrite(1, HIGH);
+  pinMode(3, OUTPUT);
+  digitalWrite(3,HIGH);
+  
   Serial.begin(115200);
   Serial8.begin(115200);
 
@@ -148,7 +157,7 @@ void setup(){
   
   bno.setExtCrystalUse(true);
 }
-bool transmissionNeeded = false;
+int transmissionNeeded = 0;
 const byte buffSize = 40;
 char inputBuffer[buffSize];
 const char startMarker = '{';
@@ -225,26 +234,30 @@ void getDataFromPC_wired() {
 
 bool latched = false;
 bool driving = false;
-int latchedOverride = 1;
+int latchedOverride = 0;
 void processCommand(String com) {
   if (com == "DROP") {
     flight_state = "O";
     transmitting = true;
     driving = true;
-  } else if (com == "T") {
-    transmissionNeeded = true;
+    latchServo.write(unlatchedDegree);
+  } else if (com == "L") {
+    transmissionNeeded += 1;
     flight_state = "O";
     transmitting = true;
     driving = true;
-  } else if (com == "L") {
+    latchServo.write(unlatchedDegree);
+  } else if (com == "T") {
     if (latchedOverride) {latchedOverride = false;} else {latchedOverride = true;}
+  } else if (com == "C") {
+    toggleCam();
   }
   //Serial8.println(com + ";");
   Serial.println(com);
 }
 
 //Motor Variables
-int spd = 175;
+int spd = 225;
 int timeSinceSwitch = 0;
 
 float deg = 0;
@@ -255,12 +268,13 @@ float targetAngle = 90;
 int dir = 1;
 int target = 0;
 
+float error = 0;
+bool toggled = false;
 void loop() {
   
   //Methods for determining time passage
   deltaTime = millis() - lastExecutionTime;
   lastExecutionTime = millis();
-  
 
   //Time since last transmission
   timeSinceLastTransmission += deltaTime;
@@ -275,7 +289,7 @@ void loop() {
   if (lastB != ReadOutB) {
     //ReadOutB == 1
     if (true) {
-      deg += 14 * dir;
+      deg += 6 * dir;
     //Serial.println("changed");
     }
     lastB = ReadOutB;
@@ -331,7 +345,8 @@ void loop() {
   double temperature = MS5611.getTemperature();
 
   //Should we transmit? - timeSinceLastTransmission > transmissionInterval
-  if (transmissionNeeded) {
+  //transmissionNeeded
+  while (transmissionNeeded > 0) {
       bno.getEvent(&event);
       bno.getEvent(&linearAccelData, Adafruit_BNO055::VECTOR_LINEARACCEL);
       
@@ -354,7 +369,7 @@ void loop() {
       RTC.set(1653494690);
       
       toTransmit = String(realAltitude) + "," + String(temperature) + "," + String(voltage) + "," + String(x_orientation) + "," + String(y_orientation) + "," + String(z_orientation);
-      toTransmit = toTransmit + "," + String(x_accel) + "," + String(y_accel) + "," + String(z_accel) + "," + String(x_mag) + "," + String(y_mag) + "," + String(z_mag) + ",0," + flight_state;
+      toTransmit = toTransmit + "," + String(x_accel) + "," + String(y_accel) + "," + String(z_accel) + "," + String(x_mag) + "," + String(y_mag) + "," + String(z_mag) + "," + String(error) + "," + flight_state + "";
       
       if (true) { 
         transmitPacket(toTransmit);
@@ -362,13 +377,13 @@ void loop() {
         timeSinceLastTransmission = 0;
         backupPackets(packetsTransmitted);
       }
-      transmissionNeeded = false;
+      transmissionNeeded -= 1;
   }
 
   //Motor driving code
   target = yaw;
 
-  float error = deg-yaw;
+  error = deg-yaw;
 
   if (deg > 180) {
     deg -= 360;
@@ -388,16 +403,16 @@ void loop() {
     error += 360;
   }
 
-  if (error < -10) {
+  if (error < -20) {
     dir = 1;
-  } else if (error > 10){
+  } else if (error > 20){
     dir = -1;
   } else {
     dir = 0;
   }
 
-  if (false) {
-    motor1.drive(spd * dir); // I think 35 is about the least power I can send the motor and have it still driver.
+  if (true) {
+    //motor1.drive(spd * dir); // I think 35 is about the least power I can send the motor and have it still driver.
   }
 
   //Should we blink?
@@ -415,12 +430,18 @@ void loop() {
 
   //State Machine
   if (flight_state == "S") {
-    latchServo.write(latchedDegree);
+    //latchServo.write(latchedDegree);
   } else if (flight_state == "O") {
     latchServo.write(unlatchedDegree);
     driving = true;
-    if (realAltitude < -100) {
+    if (toggled == false) {
+      toggleCam();
+      Serial.println("ah");
+      toggled = true;
+    }
+    if (realAltitude < 10) {
       flight_state = "L";
+      toggleCam();
       
       blinking = true;
       digitalWrite(2, HIGH);
@@ -430,6 +451,4 @@ void loop() {
   if (latchedOverride) {
     latchServo.write(unlatchedDegree);
   }
-
-  //Serial.println(time2-time1);
-  }
+}
